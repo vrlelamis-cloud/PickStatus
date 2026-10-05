@@ -27,28 +27,36 @@ jobs:
 
       - name: Vérifier l'archive PickStatus
         run: |
-          set -euo pipefail
-          test -f PickStatus_BUILD_READY_V2.zip
-          unzip -t PickStatus_BUILD_READY_V2.zip
+          set -e
+          test -f PickStatus_BUILD_READY.zip
+          unzip -t PickStatus_BUILD_READY.zip
 
       - name: Extraire le projet
         run: |
-          set -euo pipefail
+          set -e
           rm -rf source
           mkdir source
-          unzip -q PickStatus_BUILD_READY_V2.zip -d source
+          unzip -q PickStatus_BUILD_READY.zip -d source
           PROJECT_DIR="$(find source -name pubspec.yaml -print -quit | xargs -r dirname)"
           test -n "$PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Nettoyer les anciens tests générés
+        run: |
+          set -e
+          rm -f "$PROJECT_DIR/test/widget_test.dart"
 
       - name: Générer le wrapper Android manquant
         working-directory: ${{ env.PROJECT_DIR }}
         run: flutter create --platforms=android .
 
-      - name: Nettoyer le test Flutter généré automatiquement
+      - name: Vérifier la configuration Gradle Flutter
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -euo pipefail
-          rm -f "$PROJECT_DIR/test/widget_test.dart"
+          set -e
+          test -f android/settings.gradle.kts
+          grep -q 'flutter_tools/gradle' android/settings.gradle.kts
+          test -f android/app/build.gradle.kts
 
       - name: Obtenir les dépendances
         working-directory: ${{ env.PROJECT_DIR }}
