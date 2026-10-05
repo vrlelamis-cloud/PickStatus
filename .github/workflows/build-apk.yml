@@ -5,52 +5,107 @@ on:
     branches: ["main", "master"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build Android APK
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - name: Install Java 17
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Flutter
+      - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Extract PickStatus project
+      - name: Find PickStatus project archive
+        id: archive
+        shell: bash
         run: |
+          set -euo pipefail
+
+          if [ -f "PickStatus_FINAL.zip" ]; then
+            ZIP_FILE="PickStatus_FINAL.zip"
+          elif [ -f "PickStatus_Flutter_FIXED.zip" ]; then
+            ZIP_FILE="PickStatus_Flutter_FIXED.zip"
+          elif [ -f "PickStatus_Flutter.zip" ]; then
+            ZIP_FILE="PickStatus_Flutter.zip"
+          else
+            ZIP_FILE="$(find . -maxdepth 1 -type f -iname 'PickStatus*.zip*' -print -quit || true)"
+          fi
+
+          if [ -z "${ZIP_FILE:-}" ]; then
+            echo "::error::Aucun fichier ZIP PickStatus trouvé à la racine du dépôt."
+            exit 1
+          fi
+
+          echo "Archive sélectionnée: $ZIP_FILE"
+          echo "zip=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract project
+        shell: bash
+        run: |
+          set -euo pipefail
           rm -rf source
-          mkdir source
-          unzip -q PickStatus_Flutter.zip -d source
+          mkdir -p source
+          unzip -q "${{ steps.archive.outputs.zip }}" -d source
 
-      - name: Prepare Flutter Android wrapper
-        working-directory: source/PickStatus
+      - name: Locate Flutter project
+        id: project
+        shell: bash
         run: |
-          flutter create --platforms=android .
+          set -euo pipefail
+          PROJECT_DIR="$(dirname "$(find source -type f -name pubspec.yaml -print -quit)")"
 
-      - name: Install dependencies
-        working-directory: source/PickStatus
+          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/pubspec.yaml" ]; then
+            echo "::error::pubspec.yaml introuvable dans l'archive."
+            exit 1
+          fi
+
+          echo "Projet Flutter: $PROJECT_DIR"
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Generate missing Flutter Android wrapper
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: flutter create --platforms=android .
+
+      - name: Get dependencies
+        working-directory: ${{ steps.project.outputs.dir }}
         run: flutter pub get
 
+      - name: Analyze Dart code
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: flutter analyze
+
       - name: Run tests
-        working-directory: source/PickStatus
+        working-directory: ${{ steps.project.outputs.dir }}
         run: flutter test
 
       - name: Build release APK
-        working-directory: source/PickStatus
+        working-directory: ${{ steps.project.outputs.dir }}
         run: flutter build apk --release
 
+      - name: Verify APK
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: PickStatus-APK
-          path: source/PickStatus/build/app/outputs/flutter-apk/app-release.apk
+          path: ${{ steps.project.outputs.dir }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
